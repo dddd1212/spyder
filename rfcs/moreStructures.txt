@@ -1,0 +1,15 @@
+Attributes ::= SET OF Attribute
+
+ExtendedCertificate ::= SEQUENCE {
+  extendedCertificateInfo ExtendedCertificateInfo,
+  signatureAlgorithm SignatureAlgorithmIdentifier,
+  signature Signature }
+  
+ExtendedCertificateInfo ::= SEQUENCE {
+  version Version,
+  certificate Certificate,
+  attributes Attributes }
+  
+SignatureAlgorithmIdentifier ::= AlgorithmIdentifier
+
+Signature ::= BIT STRING
