@@ -32,6 +32,15 @@ class DERTypeError(Exception):
     #    print "DERTypeError[%s]"%e
     #    super(DERTypeError,self).__init__(e)
 
+_console_width = 80
+def _get_console_width():
+    global _console_width
+    return _console_width
+
+def _set_console_width(width):
+    global _console_width
+    _console_width = width
+
 _maxPrintRecursion = -1
 def setMaxPrintRecursion(num):
     global _maxPrintRecursion
@@ -166,7 +175,17 @@ class Primitive(DERBase):
 class OctetString(Primitive):
     def __init__(self,value="",name=None):
         super(OctetString,self).__init__(OCTET_STRING_TAG_NUMBER,0,value,name)
-    def _reprLine(self):
+    
+    def _getIndentedPrintable(self,indent):
+        required_length = 4*indent+len("[%s]"%self.getName() if self.getName() else "") + len("OctetString()")+len(self._Value)
+        if required_length <= _get_console_width():
+            val_repr = self._Value
+        else:
+            missed = required_length - _get_console_width()
+            val_repr = self._Value[:max(0,len(self._Value)-missed-3)]+"..."
+        return " "*4*indent+("[%s]"%self.getName() if self.getName() else "") + "OctetString(%s)\n"%val_repr
+        
+    def _reprLine(self): # This is not really used, as _getIndentedPrintable is overridden
         return "OctetString(%s%s)"%(self.value[:100],"..." if (len(self.value)>100) else "")
     
 class Null(Primitive):
@@ -314,8 +333,17 @@ class BitString(Primitive):
         val = "".join(['{0:08b}'.format(ord(content[i])) for i in xrange(1,len(content))])
         if pad: return val[:-pad]
         else: return val
-
-    def _reprLine(self):
+        
+    def _getIndentedPrintable(self,indent):
+        required_length = 4*indent+len("[%s]"%self.getName() if self.getName() else "") + len("BitString()")+len(self._Value)
+        if required_length <= _get_console_width():
+            val_repr = self._Value
+        else:
+            missed = required_length - _get_console_width()
+            val_repr = self._Value[:max(0,len(self._Value)-missed-3)]+"..."
+        return " "*4*indent+("[%s]"%self.getName() if self.getName() else "") + "BitString(%s)\n"%val_repr
+        
+    def _reprLine(self): # This is not really used, as _getIndentedPrintable is overridden
         return "BitString(%s%s)"%(self._Value[:100],"..." if (len(self._Value)>100) else "")
 
 class OID(Primitive):
@@ -427,7 +455,12 @@ class Tagged(DERBase):
             return x[:newLineIndex]+"<%s Tagged(%d,%d)>"%(self._taggedType,self.Class,self.Tag)+x[newLineIndex:]
     def getEncoded(self):
         raise
-
+    
+    def __dir__(self):
+        r = list(self.__dict__)
+        r+=self._inner._wrappable
+        return r
+    
     def __getattr__(self,attrName):
         if attrName in self._inner._wrappable:
             return getattr(self._inner,attrName)
@@ -496,7 +529,10 @@ class Constructed(DERBase):
         assert (type(Tag)==int and type(Class)==int)
         for obj in contentObjects: assert(isinstance(obj,DERBase))
         self.contentObjects = contentObjects
-        self._wrappable = ["__getitem__","__setitem__","__delitem__","__len__","getContentOctets","insert","append"]
+        self._update_wrappable()
+        
+    def _update_wrappable(self):
+        self._wrappable = ["__getitem__","__setitem__","__delitem__","__len__","getContentOctets","insert","append"]+[i.getName() for i in self.contentObjects if i.getName()]
 
     def __dir__(self):
         r = list(self.__dict__)
@@ -511,21 +547,31 @@ class Constructed(DERBase):
                 return obj
         raise AttributeError(attrName)
     
+    def __setattr__(self,attrName,value):
+        if attrName.startswith("_") or attrName not in self._wrappable: # contains the item elements (among other things)
+            super(Constructed,self).__setattr__(attrName,value)
+        else:
+            raise Exception("Cannot change template")
+    
     def __getitem__(self,index):
         return self.contentObjects[index]
     
     def __setitem__(self,index,item):
         assert(isinstance(item,DERBase))
         self.contentObjects[index]=item
+        self._update_wrappable()
 
     def __delitem__(self,index):
         del self.contentObjects[index]
+        self._update_wrappable()
 
     def insert(self,index,item):
         self.contentObjects.insert(index,item)
+        self._update_wrappable()
 
     def append(self,item):
         self.contentObjects.append(item)
+        self._update_wrappable()
 
     def __len__(self):
         return len(self.contentObjects)
@@ -665,11 +711,11 @@ class Any(DERBase):
         self.Class = Class
         self._Constructed = isConstructed
         if (Class,Tag,isConstructed) in Any.typesDict:
-            self._inner = Any.typesDict[(Class,Tag,isConstructed)](name=self.getName())
+            self._inner = Any.typesDict[(Class,Tag,isConstructed)]()
         elif isConstructed:
-            self._inner = Constructed(Tag,Class,name=self.getName())
+            self._inner = Constructed(Tag,Class)
         else:
-            self._inner = Primitive(Tag,Class,name = self.getName())
+            self._inner = Primitive(Tag,Class)
     def _loadContentFromBytes(self,data,offset,Length):
         if not self._Constructed:
             self._inner._loadContentFromBytes(data,offset,Length)
