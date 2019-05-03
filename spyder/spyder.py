@@ -47,18 +47,13 @@ def setMaxPrintRecursion(num):
     _maxPrintRecursion = num
     
 class DERBase(object):
-    def __init__(self,Tag,Class,Constructed,name=None):
-        self._name=name
+    def __init__(self,Tag,Class,Constructed):
         self._wrappable = []
         self.Tag = Tag
         self.Class = Class
         self._Constructed = Constructed
     def __repr__(self):
-        return self._getIndentedPrintable(0)
-    def getName(self):
-        return self._name
-    def setName(self,name):
-        self._name=name
+        return self._getIndentedPrintable(0,"")
     def getEncoded(self):
         encContent = self.getContentOctets()
         if self.Tag < 30:
@@ -122,12 +117,12 @@ class DERBase(object):
         
     def _loadContentFromBytes(self,data,offset,Length):
         raise Exception("cannot load abstract type from bytes")
-    def _getIndentedPrintable(self,indent):
-        return " "*4*indent+"DERBase(Length: %s, Content: %s)"%(len(self.getContentOctets()),self.getContentOctets().encode("hex"))
+    def _getIndentedPrintable(self,indent,name):
+        return " "*4*indent+("[%s]"%name if name else "")+"DERBase(Length: %s, Content: %s)"%(len(self.getContentOctets()),self.getContentOctets().encode("hex"))
 
 class Primitive(DERBase):
-    def __init__(self,Tag,Class,value="",name=None):
-        super(Primitive,self).__init__(Tag,Class,False,name)
+    def __init__(self,Tag,Class,value=""):
+        super(Primitive,self).__init__(Tag,Class,False)
         assert (type(Tag)==int and type(Class)==int)
         self.setValue(value)
         self._wrappable = ["getContentOctets","setContentOctets","getValue","setValue","value"]
@@ -165,32 +160,32 @@ class Primitive(DERBase):
     def _contentToValue(self,content):
         return content.encode("hex")
 
-    def _getIndentedPrintable(self,indent):
-        return " "*4*indent+("[%s]"%self.getName() if self.getName() else "") + self._reprLine()+"\n"
+    def _getIndentedPrintable(self,indent,name):
+        return " "*4*indent+("[%s]"%name if name else "") + self._reprLine()+"\n"
     def _reprLine(self):
         return "Primitive(Type: %s, Length: %s, Content: %s%s)"%(self.Tag,len(self.getContentOctets()),self.value[:100],"..." if (len(self.value)>100) else "")
     def _loadContentFromBytes(self,data,offset,Length):
         self.setContentOctets(data[offset:offset+Length])
 
 class OctetString(Primitive):
-    def __init__(self,value="",name=None):
-        super(OctetString,self).__init__(OCTET_STRING_TAG_NUMBER,0,value,name)
+    def __init__(self,value=""):
+        super(OctetString,self).__init__(OCTET_STRING_TAG_NUMBER,0,value)
     
-    def _getIndentedPrintable(self,indent):
-        required_length = 4*indent+len("[%s]"%self.getName() if self.getName() else "") + len("OctetString()")+len(self._Value)
+    def _getIndentedPrintable(self,indent,name):
+        required_length = 4*indent+len("[%s]"%name if name else "") + len("OctetString()")+len(self._Value)
         if required_length <= _get_console_width():
             val_repr = self._Value
         else:
             missed = required_length - _get_console_width()
             val_repr = self._Value[:max(0,len(self._Value)-missed-3)]+"..."
-        return " "*4*indent+("[%s]"%self.getName() if self.getName() else "") + "OctetString(%s)\n"%val_repr
+        return " "*4*indent+("[%s]"%name if name else "") + "OctetString(%s)\n"%val_repr
         
     def _reprLine(self): # This is not really used, as _getIndentedPrintable is overridden
         return "OctetString(%s%s)"%(self.value[:100],"..." if (len(self.value)>100) else "")
     
 class Null(Primitive):
-    def __init__(self,name=None):
-        super(Primitive,self).__init__(NULL_TAG_NUMBER,0,False,name)
+    def __init__(self):
+        super(Primitive,self).__init__(NULL_TAG_NUMBER,0,False)
         self._Content = ""
         self._wrappable = ["getContentOctets"]
     def _reprLine(self):
@@ -203,8 +198,8 @@ class Null(Primitive):
         assert (newContent == "")
 
 class Boolean(Primitive):
-    def __init__(self,value=False,name=None):
-        super(Boolean,self).__init__(BOOLEAN_TAG_NUMBER,0,value,name)
+    def __init__(self,value=False):
+        super(Boolean,self).__init__(BOOLEAN_TAG_NUMBER,0,value)
     def _valueToContent(self,value):
         if value == False:
             content = "\x00"
@@ -222,8 +217,8 @@ class Boolean(Primitive):
         return "Integer(%d)"%(self._Value)
 
 class RestrictedCharacterString(Primitive):
-    def __init__(self,value="",name=None):
-        super(RestrictedCharacterString,self).__init__(self.__class__.Tag,0,value,name)
+    def __init__(self,value=""):
+        super(RestrictedCharacterString,self).__init__(self.__class__.Tag,0,value)
 
     def _valueToContent(self,value):
         return value
@@ -287,8 +282,8 @@ class GeneralizedTime(RestrictedCharacterString):
     stringName = "GeneralizedTime"
 
 class Integer(Primitive):
-    def __init__(self,value=0,name=None):
-        super(Integer,self).__init__(INTEGER_TAG_NUMBER,0,value,name)
+    def __init__(self,value=0):
+        super(Integer,self).__init__(INTEGER_TAG_NUMBER,0,value)
     def _valueToContent(self,value):
         if value == 0:
             content = "\x00"
@@ -315,8 +310,8 @@ class Integer(Primitive):
         return "Integer(%d)"%(self._Value)
 
 class BitString(Primitive):
-    def __init__(self,value="",name=None):
-        super(BitString,self).__init__(BIT_STRING_TAG_NUMBER,0,value,name)
+    def __init__(self,value=""):
+        super(BitString,self).__init__(BIT_STRING_TAG_NUMBER,0,value)
     def _valueToContent(self,value):
         l = len(value)/8
         rem = len(value)%8
@@ -334,22 +329,22 @@ class BitString(Primitive):
         if pad: return val[:-pad]
         else: return val
         
-    def _getIndentedPrintable(self,indent):
-        required_length = 4*indent+len("[%s]"%self.getName() if self.getName() else "") + len("BitString()")+len(self._Value)
+    def _getIndentedPrintable(self,indent,name):
+        required_length = 4*indent+len("[%s]"%name if name else "") + len("BitString()")+len(self._Value)
         if required_length <= _get_console_width():
             val_repr = self._Value
         else:
             missed = required_length - _get_console_width()
             val_repr = self._Value[:max(0,len(self._Value)-missed-3)]+"..."
-        return " "*4*indent+("[%s]"%self.getName() if self.getName() else "") + "BitString(%s)\n"%val_repr
+        return " "*4*indent+("[%s]"%name if name else "") + "BitString(%s)\n"%val_repr
         
     def _reprLine(self): # This is not really used, as _getIndentedPrintable is overridden
         return "BitString(%s%s)"%(self._Value[:100],"..." if (len(self._Value)>100) else "")
 
 class OID(Primitive):
     oids = {}
-    def __init__(self,value="1.2",name=None):
-        super(OID,self).__init__(OID_TAG_NUMBER,0,value,name)
+    def __init__(self,value="1.2"):
+        super(OID,self).__init__(OID_TAG_NUMBER,0,value)
     def _valueToContent(self,value):
         nums = map(int,value.split("."))
         content = chr(40*nums[0]+nums[1])
@@ -386,19 +381,28 @@ class OID(Primitive):
 
 
 class Choice(DERBase):
-    def __init__(self, choices, selected = 0,name=None):
+    def __init__(self, choices, selected = 0):
+        choices = [(i,"") if isinstance(i,DERBase) else i for i in choices]
         self._choices = choices
         if type(selected) == int:
-            self._selected = self._choices[selected]
+            # choose by index
+            self._selected = self._choices[selected][0]
+            self._selectedname = self._choices[selected][1]
+        elif type(selected) == str:
+            # choose by name
+            x = [i for i in self._choices if i[1] == selected]
+            assert (len(x)==1)
+            self._selected = x[0][0]
+            self._selectedname = x[0][1]
         else:
-            assert(isinstance(selected,DERBase))
-            assert(selected in choices)
-            self._selected = selected
-        super(Choice,self).__init__(self._selected.Tag,self._selected.Class,self._selected._Constructed,name)
-    def _getIndentedPrintable(self,indent):
-        x = self._selected._getIndentedPrintable(indent)
-        if self._name:
-            x = x[:x.find("[")+1]+"%s."%self._name+x[x.find("[")+1:]
+            # choose by der-object
+            x = [i for i in self._choices if i[0] == selected]
+            assert (len(x)==1)
+            self._selected = x[0][0]
+            self._selectedname = x[0][1]
+        super(Choice,self).__init__(self._selected.Tag,self._selected.Class,self._selected._Constructed)
+    def _getIndentedPrintable(self,indent,name):
+        x = self._selected._getIndentedPrintable(indent,name)
         newLineIndex = x.find("\n")
         if newLineIndex == -1:
             return x+"<choice>"
@@ -408,20 +412,21 @@ class Choice(DERBase):
         return self._selected.getEncoded()
     def __dir__(self):
         r = list(self.__dict__)
-        if self._selected.getName(): r.append(self._selected.getName())
+        if self._selectedname: r.append(self._selectedname)
         return r
     def __getattr__(self,attrName):
-        for obj in self._choices:
-            if obj.getName()==attrName:
-                return obj
+        for choice in self._choices:
+            if choice[1]==attrName:
+                return choice[0]
         raise AttributeError(attrName)
     def _loadType(self, Tag, Class, Constructed):
         for obj in self._choices:
             try:
-                obj._loadType(Tag,Class,Constructed)
+                obj[0]._loadType(Tag,Class,Constructed)
             except DERTypeError:
                 continue
-            self._selected = obj
+            self._selected = obj[0]
+            self._selectedname = obj[1]
             self.Tag = Tag
             self.Class = Class
             self._Constructed = Constructed
@@ -440,14 +445,10 @@ class Tagged(DERBase):
         self._presented = True
     def isOptional(self):
         return self._optional
-    def getName(self):
-        return self._inner.getName()
-    def setName(self,name):
-        self._inner.setName(Name)
-    def _getIndentedPrintable(self,indent):
+    def _getIndentedPrintable(self,indent,name):
         if not self._presented:
-            return indent*4*" "+"<[%s] optional and not presented>\n"%self._inner.getName()
-        x = self._inner._getIndentedPrintable(indent)
+            return indent*4*" "+"<[%s] optional and not presented>\n"%name
+        x = self._inner._getIndentedPrintable(indent,name)
         newLineIndex = x.find("\n")
         if newLineIndex == -1:
             return x+"<%s Tagged(%d,%d)>"%(self._taggedType,self.Class,self.Tag)
@@ -523,28 +524,29 @@ class ImplicitlyTagged(Tagged):
 
 
 class Constructed(DERBase):
-    def __init__(self,Tag,Class,contentObjects=None,name=None):
+    def __init__(self,Tag,Class,contentObjects=None):
         if contentObjects == None: contentObjects = []
-        super(Constructed,self).__init__(Tag,Class,True,name)
+        contentObjects = [(i,"") if isinstance(i,DERBase) else i for i in contentObjects]
+        super(Constructed,self).__init__(Tag,Class,True)
         assert (type(Tag)==int and type(Class)==int)
-        for obj in contentObjects: assert(isinstance(obj,DERBase))
-        self.contentObjects = contentObjects
+        for obj in contentObjects: assert(isinstance(obj[0],DERBase))
+        self._contentObjects = contentObjects
         self._update_wrappable()
         
     def _update_wrappable(self):
-        self._wrappable = ["__getitem__","__setitem__","__delitem__","__len__","getContentOctets","insert","append"]+[i.getName() for i in self.contentObjects if i.getName()]
+        self._wrappable = ["__getitem__","__setitem__","__delitem__","__len__","getContentOctets","insert","append"]+[i[1] for i in self._contentObjects if i[1]]
 
     def __dir__(self):
         r = list(self.__dict__)
-        for o in self.contentObjects:
-            if o.getName():
-                r.append(o.getName())
+        for o in self._contentObjects:
+            if o[1]:
+                r.append(o[1])
         return r
 
     def __getattr__(self,attrName):
-        for obj in self.contentObjects:
-            if obj.getName()==attrName:
-                return obj
+        for obj in self._contentObjects:
+            if obj[1]==attrName:
+                return obj[0]
         raise AttributeError(attrName)
     
     def __setattr__(self,attrName,value):
@@ -554,104 +556,110 @@ class Constructed(DERBase):
             raise Exception("Cannot change template")
     
     def __getitem__(self,index):
-        return self.contentObjects[index]
+        return self._contentObjects[index][0]
     
     def __setitem__(self,index,item):
         assert(isinstance(item,DERBase))
-        self.contentObjects[index]=item
+        self._contentObjects[index][0]=item
         self._update_wrappable()
 
     def __delitem__(self,index):
-        del self.contentObjects[index]
+        del self._contentObjects[index]
         self._update_wrappable()
 
     def insert(self,index,item):
-        self.contentObjects.insert(index,item)
+        item = (item,"") if isinstance(item,DERBase) else item
+        assert(isinstance(item[0],DERBase))
+        self._contentObjects.insert(index,item)
         self._update_wrappable()
 
     def append(self,item):
-        self.contentObjects.append(item)
+        item = (item,"") if isinstance(item,DERBase) else item
+        assert(isinstance(item[0],DERBase))
+        self._contentObjects.append(item)
         self._update_wrappable()
 
     def __len__(self):
-        return len(self.contentObjects)
+        return len(self._contentObjects)
 
     def getContentOctets(self):
         encContent = ""
-        for i in self.contentObjects:
-            encContent+=i.getEncoded()
+        for i in self._contentObjects:
+            encContent+=i[0].getEncoded()
         return encContent
 
-    def _getIndentedPrintable(self,indent):
+    def _getIndentedPrintable(self,indent,name):
         res = ""
-        res += " "*4*indent+("[%s]"%self.getName() if self.getName() else "") + self._reprLine()+"\n"
+        res += " "*4*indent+("[%s]"%name if name else "") + self._reprLine()+"\n"
         if _maxPrintRecursion!=-1 and _maxPrintRecursion<=indent:
-            if self.contentObjects:
-                res += " "*4*(indent+1)+"... <%d items> ...\n"%len(self.contentObjects)
+            if self._contentObjects:
+                res += " "*4*(indent+1)+"... <%d items> ...\n"%len(self._contentObjects)
         else:
-            for o in self.contentObjects:
-                res+=o._getIndentedPrintable(indent+1)
+            for o in self._contentObjects:
+                res+=o[0]._getIndentedPrintable(indent+1,o[1])
         return res
     def _reprLine(self):
         return "Constructed(Class=0x%x, Tag=0x%x):"%(self.Class,self.Tag)
 
 class Sequence(Constructed):
-    def __init__(self,contentObjects=None,name=None):
-        super(Sequence,self).__init__(SEQUENCE_TAG_NUMBER,0,contentObjects,name)
+    def __init__(self,contentObjects=None):
+        super(Sequence,self).__init__(SEQUENCE_TAG_NUMBER,0,contentObjects)
     def _reprLine(self):
         return "Sequence:"
     def _loadContentFromBytes(self,data,offset,Length):
         orgOffset = offset
-        for o in self.contentObjects:
-            offset = o.loadFromBytes(data,offset)
+        for o in self._contentObjects:
+            offset = o[0].loadFromBytes(data,offset)
         assert (orgOffset+Length == offset)
 
 class SequenceOf(Sequence):
-    def __init__(self,elementName,contentObjects=None,name=None):
-        super(SequenceOf,self).__init__(contentObjects,name)
+    def __init__(self,elementName,contentObjects=None):
+        super(SequenceOf,self).__init__(contentObjects)
         self.elementName = elementName
     def _reprLine(self):
         return "SequenceOf(%s):"%self.elementName
     def _loadContentFromBytes(self,data,offset,Length):
-        self.contentObjects = []
+        self._contentObjects = []
         orgOffset = offset
         while offset < orgOffset+Length:
             o = buildTemplate(self.elementName)
             offset = o.loadFromBytes(data,offset)
-            self.contentObjects.append(o)
+            self._contentObjects.append((o,""))
 
 class Set(Constructed):
-    def __init__(self,contentObjects=None,name=None):
-        super(Set,self).__init__(SET_TAG_NUMBER,0,contentObjects,name)
+    def __init__(self,contentObjects=None):
+        super(Set,self).__init__(SET_TAG_NUMBER,0,contentObjects)
     def _reprLine(self):
         return "Set:"
     def _loadContentFromBytes(self,data,offset,Length):
         orgOffset = offset
-        objs = self.contentObjects[:]
+        objs = self._contentObjects[:]
         while offset < orgOffset+Length:
             for o in objs:
                 try:
-                    offset = o.loadFromBytes(data,offset)
+                    offset = o[0].loadFromBytes(data,offset)
                     objs.pop(o)
                     break
                 except DERTypeError:
                     continue
+            else:
+                raise Exception("Error while loading Set")
         assert all([(isinstance(o, Tagged) and o.isOptional) for o in objs])
         assert (orgOffset+Length == offset)
 
 class SetOf(Set):
-    def __init__(self,elementName,contentObjects=None,name=None):
-        super(SetOf,self).__init__(contentObjects,name)
+    def __init__(self,elementName,contentObjects=None):
+        super(SetOf,self).__init__(contentObjects)
         self.elementName = elementName
     def _reprLine(self):
         return "SetOf(%s):"%self.elementName
     def _loadContentFromBytes(self,data,offset,Length):
-        self.contentObjects = []
+        self._contentObjects = []
         orgOffset = offset
         while offset < orgOffset+Length:
             o = buildTemplate(self.elementName)
             offset = o.loadFromBytes(data,offset)
-            self.contentObjects.append(o)
+            self._contentObjects.append((o,""))
 
 
 class Any(DERBase):
@@ -675,15 +683,12 @@ class Any(DERBase):
                  (0,BMPSTRING_TAG_NUMBER,False): BMPString,
                  (0,SEQUENCE_TAG_NUMBER,True): Sequence,
                  (0,SET_TAG_NUMBER,True): Set}
-    def __init__(self, der=None, name=None):
+    def __init__(self, der=None):
         if not der: der = Null()
-        super(Any,self).__init__(der.Tag,der.Class,der._Constructed,name)
+        super(Any,self).__init__(der.Tag,der.Class,der._Constructed)
         self._inner = der
-    def _getIndentedPrintable(self,indent):
-        x = self._inner._getIndentedPrintable(indent)
-        if self.getName():
-            nameIndex = len(x) - len(x.lstrip())
-            x = x[:nameIndex]+"[%s]"%self.getName()+x[nameIndex:]
+    def _getIndentedPrintable(self,indent,name):
+        x = self._inner._getIndentedPrintable(indent,name)
         newLineIndex = x.find("\n")
         if newLineIndex == -1:
             return x+"<any>"
@@ -835,12 +840,11 @@ def buildTemplate(name,defaultTagging = None):
             splited = l.split(None,1)
             typeName = splited[0]
             x = buildTemplate(typeName)
-            x.setName(name)
             if tagging == "E":
                 x = ExplicitlyTagged(tag, CONTEXT_SPECIFIC_CLASS,  x, False)
             elif tagging == "I":
                 x = ImplicitlyTagged(tag if tag!=None else x.Tag, CONTEXT_SPECIFIC_CLASS if tag!=None else UNIVERSAL_CLASS, x, False)
-            choices.append(x)
+            choices.append((x,name))
         return Choice(choices)
     
     elif x.startswith("SEQUENCE_OF"):
@@ -885,12 +889,11 @@ def buildTemplate(name,defaultTagging = None):
             else:
                 optional = False
             template = buildTemplate(typeName)
-            template.setName(name)
             if tagging == "E":
                 template = ExplicitlyTagged(tag, CONTEXT_SPECIFIC_CLASS,  template, optional)
             elif tagging == "I" or optional:
                 template = ImplicitlyTagged(tag if tag!=None else template.Tag, CONTEXT_SPECIFIC_CLASS if tag!=None else UNIVERSAL_CLASS, template, optional)
-            objs.append(template)
+            objs.append((template,name))
         if x.startswith("SEQUENCE"): return Sequence(objs)
         elif x.startswith("SET"): return Set(objs)
         else: raise
