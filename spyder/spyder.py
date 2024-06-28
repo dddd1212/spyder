@@ -46,57 +46,66 @@ def setMaxPrintRecursion(num):
     global _maxPrintRecursion
     _maxPrintRecursion = num
     
-class DERBase(object):
-    def __init__(self,Tag,Class,Constructed):
+class DERBase:
+    def __init__(self, Tag:int, Class:int, Constructed:bool):
         self._wrappable = []
         self.Tag = Tag
         self.Class = Class
         self._Constructed = Constructed
+
     def __repr__(self):
         return self._getIndentedPrintable(0,"")
-    def getEncoded(self):
+
+    def getContentOctets(self) -> bytes:
+        raise Exception("Cannot get content octets of abstract DERBase")
+    
+    def getEncoded(self) -> bytes:
         encContent = self.getContentOctets()
-        if self.Tag < 30:
-            encType = chr((self.Class<<6)+self._Constructed*(1<<5)+(self.Tag))
+        if self.Tag <= 30:
+            encType = bytes([(self.Class<<6) + self._Constructed*(1<<5) + (self.Tag)])
         else:
             c = self.Tag
-            r = chr(c&0x7f)
+            r = bytes([c&0x7f])
             c>>=7
             while c > 0:
-                r += chr((c&0x7f)+0x80)
+                r += bytes([(c&0x7f)+0x80])
                 c>>=7
                 
-            encType = chr((self.Class<<6)+self._Constructed*(1<<5)+0b11111)+r[::-1]
+            encType = bytes([(self.Class<<6)+self._Constructed*(1<<5)+0b11111])+r[::-1]
             
-        contentLength=len(encContent)
+        contentLength = len(encContent)
         if contentLength < 0x80:
-            encLength = chr(contentLength)
+            encLength = bytes([contentLength])
         else:
-            r = ""
+            r = b""
             c = contentLength
             while c >= 0x100:
-                r += chr(c&0xff)
+                r += bytes([c&0xff])
                 c>>=8
-            r+=chr(c)
-            encLength = chr(0x80+len(r))+r[::-1]
+            r+=bytes([c])
+            encLength = bytes([0x80+len(r)])+r[::-1]
         return encType+encLength+encContent
-    def loadFromBytes(self,data,offset=0):
-        begin_offset=offset
-        Type = ord(data[offset])
+    
+    # end_offset=None means until end of `data`.
+    # end_offset=-1 means conclude from the object header
+    def loadFromBytes(self, data, begin_offset=0, end_offset=None):
+        if end_offset == None: end_offset = len(data)
+        offset = begin_offset
+        Type = data[offset]
         Class = Type>>6
         Constructed = (Type&0b100000)!=0
         Tag = Type&0b11111
-        offset+=1
+        offset += 1
         if Tag == 0b11111:
             curByte = 0x80
             Tag = 0
             while curByte&0x80:
-                curByte = ord(data[offset])
-                Tag<<=7
-                Tag+=(curByte&0b1111111)
+                curByte = data[offset]
+                Tag <<= 7
+                Tag += (curByte & 0x7f)
                 offset+=1
         self._loadType(Tag, Class, Constructed)
-        Length = ord(data[offset])
+        Length = data[offset]
         offset+=1
         if Length&0x80:
             LengthOfLength = Length - 0x80
@@ -104,12 +113,15 @@ class DERBase(object):
                 raise Exception("Syntax Error (Length of Length = 0)")
             if LengthOfLength+offset>len(data):
                 raise Exception("Error: not enough bytes for Length")
-            Length = int(data[offset:offset+LengthOfLength].encode("hex"),16)
+            Length = int.from_bytes(data[offset:offset+LengthOfLength], "big")
             offset+=LengthOfLength
-        if Length+offset>len(data):
+        if ((end_offset != -1) and Length + offset > end_offset) or (Length + offset > len(data)):
             raise Exception("Error: not enough bytes for content")
-        self._loadContentFromBytes(data,offset,Length)
+        if (end_offset != -1) and Length + offset < end_offset:
+            raise Exception("Error: redundent bytes")
+        self._loadContentFromBytes(data, offset, Length)
         return Length+offset
+    
     def _loadType(self, Tag, Class, Constructed):
         if (self.Tag != Tag): raise DERTypeError("Bad tag: (%d) instead of (%d)"%(Tag,self.Tag))
         if (self.Class != Class): raise DERTypeError("Bad class: (%d) instead class (%d)"%(Class,self.Class))
@@ -117,67 +129,67 @@ class DERBase(object):
         
     def _loadContentFromBytes(self,data,offset,Length):
         raise Exception("cannot load abstract type from bytes")
-    def _getIndentedPrintable(self,indent,name):
+    
+    def _getIndentedPrintable(self, indent, name):
         return " "*4*indent+("[%s]"%name if name else "")+"DERBase(Length: %s, Content: %s)"%(len(self.getContentOctets()),self.getContentOctets().encode("hex"))
 
 class Primitive(DERBase):
-    def __init__(self,Tag,Class,value=""):
-        super(Primitive,self).__init__(Tag,Class,False)
+    def __init__(self, Tag, Class, value:any=""):
+        super().__init__(Tag,Class,False)
         assert (type(Tag)==int and type(Class)==int)
         self.setValue(value)
         self._wrappable = ["getContentOctets","setContentOctets","getValue","setValue","value"]
 
-    def getContentOctets(self):
+    def getContentOctets(self) -> bytes:
         return self._Content
 
-    def setContentOctets(self,newContent):
+    def setContentOctets(self, newContent: bytes):
         newVal = self._contentToValue(newContent)
-        self._Value = newVal
+        self._value = newVal
         self._Content = newContent
 
     def getValue(self):
-        return self._Value
+        return self._value
 
-    def setValue(self,newVal):
+    def setValue(self, newVal):
         newContent = self._valueToContent(newVal)
-        self._Value = newVal
+        self._value = newVal
         self._Content = newContent
 
-    def __getattr__(self,attrName):
-        if attrName == "value":
-            return self.getValue()
-        else:
-            raise AttributeError(attrName)
-            
-    def __setattr__(self,attrName,val):
-        if attrName == "value":
-            return self.setValue(val)
-        else:
-            super(Primitive,self).__setattr__(attrName,val)
+    @property
+    def value(self):
+        return self.getValue()
+    
+    @value.setter
+    def value(self, newVal):
+        return self.setValue(newVal)
         
-    def _valueToContent(self,value):
-        return value.decode("hex")
-    def _contentToValue(self,content):
-        return content.encode("hex")
+    def _valueToContent(self, value):
+        return bytes.fromhex(value)
+        
+    def _contentToValue(self, content):
+        return content.hex()
 
     def _getIndentedPrintable(self,indent,name):
         return " "*4*indent+("[%s]"%name if name else "") + self._reprLine()+"\n"
+    
     def _reprLine(self):
         return "Primitive(Type: %s, Length: %s, Content: %s%s)"%(self.Tag,len(self.getContentOctets()),self.value[:100],"..." if (len(self.value)>100) else "")
-    def _loadContentFromBytes(self,data,offset,Length):
+    
+    def _loadContentFromBytes(self, data:bytes, offset: int, Length:int):
         self.setContentOctets(data[offset:offset+Length])
 
 class OctetString(Primitive):
-    def __init__(self,value=""):
-        super(OctetString,self).__init__(OCTET_STRING_TAG_NUMBER,0,value)
+    def __init__(self, value=""):
+        super().__init__(OCTET_STRING_TAG_NUMBER, 0, value)
     
     def _getIndentedPrintable(self,indent,name):
-        required_length = 4*indent+len("[%s]"%name if name else "") + len("OctetString()")+len(self._Value)
+        required_length = 4*indent+len("[%s]"%name if name else "") + len("OctetString()")+len(self._value)
         if required_length <= _get_console_width():
-            val_repr = self._Value
+            val_repr = self._value
         else:
             missed = required_length - _get_console_width()
-            val_repr = self._Value[:max(0,len(self._Value)-missed-3)]+"..."
+            val_repr = self._value[:max(0,len(self._value)-missed-3)]+"..."
         return " "*4*indent+("[%s]"%name if name else "") + "OctetString(%s)\n"%val_repr
         
     def _reprLine(self): # This is not really used, as _getIndentedPrintable is overridden
@@ -186,48 +198,53 @@ class OctetString(Primitive):
 class Null(Primitive):
     def __init__(self):
         super(Primitive,self).__init__(NULL_TAG_NUMBER,0,False)
-        self._Content = ""
+        self._Content = b""
         self._wrappable = ["getContentOctets"]
+
     def _reprLine(self):
         return "NULL"
+    
     def getValue(self):
         raise
+
     def setValue(self,newVal):
         raise
+
     def setContentOctets(self,newContent):
         assert (newContent == "")
 
 class Boolean(Primitive):
-    def __init__(self,value=False):
-        super(Boolean,self).__init__(BOOLEAN_TAG_NUMBER,0,value)
+    def __init__(self, value:bool=False):
+        super().__init__(BOOLEAN_TAG_NUMBER,0,value)
+
     def _valueToContent(self,value):
         if value == False:
-            content = "\x00"
+            content = b"\x00"
         elif value == True:
-            content = "\x01"
+            content = b"\x01"
         else:
             raise
         return content
 
     def _contentToValue(self,content):
         assert(len(content) == 1)
-        return content[0]!="\x00"
+        return bool(content[0])
 
     def _reprLine(self):
-        return "Integer(%d)"%(self._Value)
+        return "Integer(%d)"%(self._value)
 
 class RestrictedCharacterString(Primitive):
-    def __init__(self,value=""):
-        super(RestrictedCharacterString,self).__init__(self.__class__.Tag,0,value)
+    def __init__(self,value=b""):
+        super().__init__(self.__class__.Tag, 0, value)
 
-    def _valueToContent(self,value):
+    def _valueToContent(self, value):
         return value
 
-    def _contentToValue(self,content):
+    def _contentToValue(self, content):
         return content
 
     def _reprLine(self):
-        return "%s(\"%s\")"%(self.__class__.stringName,self._Value)
+        return "%s(\"%s\")"%(self.__class__.stringName,self._value)
 
 class UTF8String(RestrictedCharacterString):
     Tag = 12
@@ -282,87 +299,91 @@ class GeneralizedTime(RestrictedCharacterString):
     stringName = "GeneralizedTime"
 
 class Integer(Primitive):
-    def __init__(self,value=0):
-        super(Integer,self).__init__(INTEGER_TAG_NUMBER,0,value)
-    def _valueToContent(self,value):
+    def __init__(self, value=0):
+        super().__init__(INTEGER_TAG_NUMBER, 0, value)
+
+    def _valueToContent(self, value:int):
         if value == 0:
-            content = "\x00"
+            content = b"\x00"
         elif value<0:
-            byteLength = ((-value-1).bit_length()+8)/8 # the number of bits needed for (-x) is k ==> k=min(i) so that 2**(i-1)>=x ==> k = roundup(log(x))+1.
+            byteLength = ((-value-1).bit_length()+8)//8 # the number of bits needed for (-x) is k ==> k=min(i) so that 2**(i-1)>=x ==> k = roundup(log(x))+1.
                                                        #roundup(log(x)) is numofbits(x-1). so number of bytes is ((numofbits(x-1)+1)+7)/8
             val2s = (value+(1<<(byteLength*8)))
-            hexVal = "%x"%val2s
-            content = ("0"*(len(hexVal)%2)+hexVal).decode("hex")
+            content = val2s.to_bytes(byteLength, "big")
         else:
             hexVal = "%x"%value
-            content = ("0"*(len(hexVal)%2)+hexVal).decode("hex")
-            if ord(content[0])>=0x80:
-                content = "\x00"+content
+            content = bytes.fromhex("0"*(len(hexVal)%2)+hexVal)
+            content = value.to_bytes((value.bit_length()+7)//8, "big")
+            if content[0]>=0x80:
+                content = b"\x00"+content
         return content
 
     def _contentToValue(self,content):
-        if ord(content[0])<0x80:
-            return int(content.encode("hex"),16)
+        if content[0]<0x80:
+            return int.from_bytes(content, "big")
         else:
-            return int(content.encode("hex"),16) - (1<<(8*len(content)))
+            return int.from_bytes(content, "big") - (1<<(8*len(content)))
 
     def _reprLine(self):
-        return "Integer(%d)"%(self._Value)
+        return "Integer(%d)"%(self._value)
 
 class BitString(Primitive):
     def __init__(self,value=""):
-        super(BitString,self).__init__(BIT_STRING_TAG_NUMBER,0,value)
-    def _valueToContent(self,value):
+        super().__init__(BIT_STRING_TAG_NUMBER, 0, value)
+
+    def _valueToContent(self, value):
         l = len(value)/8
         rem = len(value)%8
         pad = (8-rem)%8
-        content = chr(pad)
-        for i in xrange(l):
-            content+=chr(int(value[i*8:i*8+8],2))
+        content = bytes([pad])
+        for i in range(l):
+            content+=bytes([int(value[i*8:i*8+8],2)])
         if rem:
-            content+=chr(int(value[-rem:]+"0"*pad,2))
+            content+=bytes([int(value[-rem:]+"0"*pad,2)])
         return content
 
     def _contentToValue(self,content):
-        pad = ord(content[0])
-        val = "".join(['{0:08b}'.format(ord(content[i])) for i in xrange(1,len(content))])
+        pad = content[0]
+        val = "".join(['{0:08b}'.format(content[i]) for i in range(1,len(content))])
         if pad: return val[:-pad]
         else: return val
         
     def _getIndentedPrintable(self,indent,name):
-        required_length = 4*indent+len("[%s]"%name if name else "") + len("BitString()")+len(self._Value)
+        required_length = 4*indent+len("[%s]"%name if name else "") + len("BitString()")+len(self._value)
         if required_length <= _get_console_width():
-            val_repr = self._Value
+            val_repr = self._value
         else:
             missed = required_length - _get_console_width()
-            val_repr = self._Value[:max(0,len(self._Value)-missed-3)]+"..."
+            val_repr = self._value[:max(0,len(self._value)-missed-3)]+"..."
         return " "*4*indent+("[%s]"%name if name else "") + "BitString(%s)\n"%val_repr
         
     def _reprLine(self): # This is not really used, as _getIndentedPrintable is overridden
-        return "BitString(%s%s)"%(self._Value[:100],"..." if (len(self._Value)>100) else "")
+        return "BitString(%s%s)"%(self._value[:100],"..." if (len(self._value)>100) else "")
 
 class OID(Primitive):
     oids = {}
-    def __init__(self,value="1.2"):
-        super(OID,self).__init__(OID_TAG_NUMBER,0,value)
-    def _valueToContent(self,value):
+    def __init__(self, value:str="1.2"):
+        super().__init__(OID_TAG_NUMBER,0,value)
+
+    def _valueToContent(self, value:str):
         nums = map(int,value.split("."))
-        content = chr(40*nums[0]+nums[1])
+        content = bytes([40*nums[0]+nums[1]])
         for n in nums[2:]:
-            cur = chr((n&127))
+            cur = bytes([(n&127)])
             n>>=7
             while n>0:
-                cur+=chr(0x80+(n&127))
+                cur+=bytes([0x80+(n&127)])
                 n>>=7
             content+=cur[::-1]
         return content
-    def _contentToValue(self,content):
-        first = ord(content[0])
+    
+    def _contentToValue(self, content:bytes):
+        first = content[0]
         nums = [first/40,first%40]
         acc = 0
         i = 1
         while i < len(content):
-            cur = ord(content[i])
+            cur = content[i]
             acc+=cur&0x7F
             if cur & 0x80 == 0:
                 nums.append(acc)
@@ -372,17 +393,16 @@ class OID(Primitive):
             i+=1
         oidstr = ".".join(map(str,nums))
         if oidstr in OID.oids:
-            return oids[oidstr]
+            return OID.oids[oidstr]
         else:
             return oidstr
 
     def _reprLine(self):
         return "OID(%s)"%(self.value)
 
-
 class Choice(DERBase):
     def __init__(self, choices, selected = 0):
-        choices = [(i,"") if isinstance(i,DERBase) else i for i in choices]
+        choices = [(i,"") if isinstance(i, DERBase) else i for i in choices]
         self._choices = choices
         if type(selected) == int:
             # choose by index
@@ -401,6 +421,7 @@ class Choice(DERBase):
             self._selected = x[0][0]
             self._selectedname = x[0][1]
         super(Choice,self).__init__(self._selected.Tag,self._selected.Class,self._selected._Constructed)
+
     def _getIndentedPrintable(self,indent,name):
         x = self._selected._getIndentedPrintable(indent,name)
         newLineIndex = x.find("\n")
@@ -408,17 +429,21 @@ class Choice(DERBase):
             return x+"<choice>"
         else:
             return x[:newLineIndex]+"<choice>"+x[newLineIndex:]
+        
     def getEncoded(self):
         return self._selected.getEncoded()
+    
     def __dir__(self):
         r = list(self.__dict__)
         if self._selectedname: r.append(self._selectedname)
         return r
-    def __getattr__(self,attrName):
+    
+    def __getattr__(self, attrName):
         for choice in self._choices:
             if choice[1]==attrName:
                 return choice[0]
         raise AttributeError(attrName)
+    
     def _loadType(self, Tag, Class, Constructed):
         for obj in self._choices:
             try:
@@ -432,6 +457,7 @@ class Choice(DERBase):
             self._Constructed = Constructed
             return
         raise DERTypeError("No matching choice")
+    
     def _loadContentFromBytes(self,data,offset,Length):
         self._selected._loadContentFromBytes(data,offset,Length)
 
@@ -443,8 +469,10 @@ class Tagged(DERBase):
         self._optional=optional
         self._taggedType = ""
         self._presented = True
+
     def isOptional(self):
         return self._optional
+    
     def _getIndentedPrintable(self,indent,name):
         if not self._presented:
             return indent*4*" "+"<[%s] optional and not presented>\n"%name
@@ -487,26 +515,29 @@ class Tagged(DERBase):
     def __len__(self):
         if "__len__" in self._inner._wrappable:
             return self._inner.__len__()
-    def loadFromBytes(self,data,offset=0):
-        savedOffset = offset
+    
+    def loadFromBytes(self, data, begin_offset=0, end_offset=None):
         try:
             self._presented = True
-            return super(Tagged,self).loadFromBytes(data,offset)
+            return super().loadFromBytes(data, begin_offset, end_offset)
         except DERTypeError:
             if self._optional:
                 self._presented = False
-                return savedOffset
+                return begin_offset
             else:
                 raise
+
 class ExplicitlyTagged(Tagged):
     def __init__(self,Tag,Class,der,optional=False):
         super(ExplicitlyTagged,self).__init__(Tag,Class,der,True,optional)
         self._taggedType = "Explicitly"
+
     def getEncoded(self):
         if not self._presented: return ""
         return Constructed(self.Tag,self.Class,contentObjects=[self._inner]).getEncoded()
-    def _loadContentFromBytes(self,data,offset,Length):
-        newOffset = self._inner.loadFromBytes(data,offset)
+    
+    def _loadContentFromBytes(self, data, offset, Length):
+        newOffset = self._inner.loadFromBytes(data, offset, offset+Length)
         assert(newOffset==offset+Length)
 
 class ImplicitlyTagged(Tagged):
@@ -520,8 +551,6 @@ class ImplicitlyTagged(Tagged):
         return self._inner.getEncoded()
     def _loadContentFromBytes(self,data,offset,Length):
         self._inner._loadContentFromBytes(data,offset,Length)
-
-
 
 class Constructed(DERBase):
     def __init__(self,Tag,Class,contentObjects=None):
@@ -537,7 +566,7 @@ class Constructed(DERBase):
         self._wrappable = ["__getitem__","__setitem__","__delitem__","__len__","getContentOctets","insert","append"]+[i[1] for i in self._contentObjects if i[1]]
 
     def __dir__(self):
-        r = list(self.__dict__)
+        r = super().__dir__()
         for o in self._contentObjects:
             if o[1]:
                 r.append(o[1])
@@ -555,7 +584,7 @@ class Constructed(DERBase):
         else:
             raise Exception("Cannot change template")
     
-    def __getitem__(self,index):
+    def __getitem__(self, index):
         return self._contentObjects[index][0]
     
     def __setitem__(self,index,item):
@@ -567,13 +596,13 @@ class Constructed(DERBase):
         del self._contentObjects[index]
         self._update_wrappable()
 
-    def insert(self,index,item):
+    def insert(self, index, item):
         item = (item,"") if isinstance(item,DERBase) else item
         assert(isinstance(item[0],DERBase))
         self._contentObjects.insert(index,item)
         self._update_wrappable()
 
-    def append(self,item):
+    def append(self, item):
         item = (item,"") if isinstance(item,DERBase) else item
         assert(isinstance(item[0],DERBase))
         self._contentObjects.append(item)
@@ -582,8 +611,8 @@ class Constructed(DERBase):
     def __len__(self):
         return len(self._contentObjects)
 
-    def getContentOctets(self):
-        encContent = ""
+    def getContentOctets(self) -> bytes:
+        encContent = b""
         for i in self._contentObjects:
             encContent+=i[0].getEncoded()
         return encContent
@@ -598,6 +627,7 @@ class Constructed(DERBase):
             for o in self._contentObjects:
                 res+=o[0]._getIndentedPrintable(indent+1,o[1])
         return res
+    
     def _reprLine(self):
         return "Constructed(Class=0x%x, Tag=0x%x):"%(self.Class,self.Tag)
 
@@ -609,21 +639,32 @@ class Sequence(Constructed):
     def _loadContentFromBytes(self,data,offset,Length):
         orgOffset = offset
         for o in self._contentObjects:
-            offset = o[0].loadFromBytes(data,offset)
+            if offset == orgOffset+Length:
+                assert isinstance(o[0], Tagged)
+                assert o[0]._optional
+                o[0]._presented = False
+                continue
+            offset = o[0].loadFromBytes(data, offset, -1)
         assert (orgOffset+Length == offset)
 
 class SequenceOf(Sequence):
-    def __init__(self,elementName,contentObjects=None):
+    def __init__(self,elementName:str,contentObjects=None):
         super(SequenceOf,self).__init__(contentObjects)
         self.elementName = elementName
     def _reprLine(self):
-        return "SequenceOf(%s):"%self.elementName
+        if self.elementName.count("\n"):
+            l1 = self.elementName.splitlines()[0]
+            assert "{" in l1
+            elementName = l1[:l1.find("{")+1] + "...}"
+        else:
+            elementName = self.elementName
+        return "SequenceOf(%s):"%elementName
     def _loadContentFromBytes(self,data,offset,Length):
         self._contentObjects = []
         orgOffset = offset
         while offset < orgOffset+Length:
             o = buildTemplate(self.elementName)
-            offset = o.loadFromBytes(data,offset)
+            offset = o.loadFromBytes(data, offset, -1)
             self._contentObjects.append((o,""))
 
 class Set(Constructed):
@@ -637,7 +678,7 @@ class Set(Constructed):
         while offset < orgOffset+Length:
             for o in objs:
                 try:
-                    offset = o[0].loadFromBytes(data,offset)
+                    offset = o[0].loadFromBytes(data, offset, -1)
                     objs.pop(o)
                     break
                 except DERTypeError:
@@ -658,7 +699,7 @@ class SetOf(Set):
         orgOffset = offset
         while offset < orgOffset+Length:
             o = buildTemplate(self.elementName)
-            offset = o.loadFromBytes(data,offset)
+            offset = o.loadFromBytes(data, offset, -1)
             self._contentObjects.append((o,""))
 
 
@@ -694,8 +735,9 @@ class Any(DERBase):
             return x+"<any>"
         else:
             return x[:newLineIndex]+"<any>"+x[newLineIndex:]
-    def getEncoded(self):
+    def getEncoded(self) -> bytes:
         return self._inner.getEncoded()
+    
     def __getattr__(self,attrName):
         if attrName in self._inner._wrappable:
             return getattr(self._inner,attrName)
@@ -728,7 +770,7 @@ class Any(DERBase):
             orgOffset = offset
             while offset < orgOffset+Length:
                 x = Any()
-                offset = x.loadFromBytes(data,offset)
+                offset = x.loadFromBytes(data, offset, -1)
                 self._inner.append(x._inner)
             assert (offset == orgOffset+Length)
 
@@ -743,7 +785,7 @@ def loadStructuresDefs(data):
             i+=1
             continue
         if not "::=" in l:
-            print i,l
+            print (i,l)
             raise
         name = l[:l.find("::=")].strip()
         
@@ -766,10 +808,16 @@ def loadStructuresDefs(data):
             pass
         g_structures[name] = structureDef
         
-
+g_defaultTagging = None
+def setDefaultTagging(defaultTagging):
+    global g_defaultTagging
+    g_defaultTagging = defaultTagging
+    
 def buildTemplate(name,defaultTagging = None):
+    if defaultTagging == None:
+        defaultTagging = g_defaultTagging
     bname=name
-    if name in ["INTEGER","BOOLEAN","BIT_STRING","OCTET_STRING","OBJECT_IDENTIFIER","UTF8STRING","NUMERICSTRING","PRINTABLESTRING","TELETEXSTRING","VIDEOTEXSTRING","IA5STRING","UTCTime","GeneralizedTime","GRAPHICSTRING","VISIBLESTRING",\
+    if name.split()[0] in ["INTEGER","BOOLEAN","BIT_STRING","OCTET_STRING","OBJECT_IDENTIFIER","UTF8STRING","NUMERICSTRING","PRINTABLESTRING","TELETEXSTRING","VIDEOTEXSTRING","IA5STRING","UTCTime","GeneralizedTime","GRAPHICSTRING","VISIBLESTRING",\
                 "GENERALSTRING","UNIVERSALSTRING","BMPSTRING","ANY","SEQUENCE","SET"] or name.startswith("SET_OF") or name.startswith("SEQUENCE_OF"):
         x = name
     else:
@@ -848,7 +896,7 @@ def buildTemplate(name,defaultTagging = None):
         return Choice(choices)
     
     elif x.startswith("SEQUENCE_OF"):
-        return SequenceOf(x.split()[1])
+        return SequenceOf(x[len("SEQUENCE_OF")+1:])
     elif x.startswith("SET_OF"):
         return SetOf(x.split()[1])
     elif x.startswith("SEQUENCE") or x.startswith("SET"):
