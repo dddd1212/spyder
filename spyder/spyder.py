@@ -138,7 +138,6 @@ class Primitive(DERBase):
         super().__init__(Tag,Class,False)
         assert (type(Tag)==int and type(Class)==int)
         self.setValue(value)
-        self._wrappable = ["getContentOctets","setContentOctets","getValue","setValue","value"]
 
     def getContentOctets(self) -> bytes:
         return self._Content
@@ -211,7 +210,7 @@ class Null(Primitive):
         raise
 
     def setContentOctets(self,newContent):
-        assert (newContent == "")
+        assert (newContent == b"")
 
 class Boolean(Primitive):
     def __init__(self, value:bool=False):
@@ -332,7 +331,7 @@ class BitString(Primitive):
         super().__init__(BIT_STRING_TAG_NUMBER, 0, value)
 
     def _valueToContent(self, value):
-        l = len(value)/8
+        l = len(value)//8
         rem = len(value)%8
         pad = (8-rem)%8
         content = bytes([pad])
@@ -366,7 +365,7 @@ class OID(Primitive):
         super().__init__(OID_TAG_NUMBER,0,value)
 
     def _valueToContent(self, value:str):
-        nums = map(int,value.split("."))
+        nums = list(map(int,value.split(".")))
         content = bytes([40*nums[0]+nums[1]])
         for n in nums[2:]:
             cur = bytes([(n&127)])
@@ -468,10 +467,16 @@ class Tagged(DERBase):
         super(Tagged,self).__init__(Tag,Class,Constructed)
         self._optional=optional
         self._taggedType = ""
-        self._presented = True
+        self._presented = not optional
 
     def isOptional(self):
         return self._optional
+    
+    def isPresented(self):
+        return self._presented
+    
+    def setPresented(self, val:bool):
+        self._presented = val
     
     def _getIndentedPrintable(self,indent,name):
         if not self._presented:
@@ -490,6 +495,37 @@ class Tagged(DERBase):
         r+=self._inner._wrappable
         return r
     
+    def getValue(self):
+        return self._inner.getValue()
+
+    def setValue(self, newVal):
+        self._presented = True
+        self._inner.setValue(newVal)
+
+    def getContentOctets(self) -> bytes:
+        return self._inner.getContentOctets()
+
+    def setContentOctets(self, newContent: bytes):
+        self._presented = True
+        self._inner.setContentOctets(newContent)
+    
+    @property
+    def value(self):
+        return self.getValue()
+    
+    @value.setter
+    def value(self, newVal):
+        self._presented = True
+        return self.setValue(newVal)
+    
+    def insert(self, index, item):
+        self._presented = True
+        self._inner.insert(index, item)
+
+    def append(self, item):
+        self._presented = True
+        self._inner.append(item)
+    
     def __getattr__(self,attrName):
         if attrName in self._inner._wrappable:
             return getattr(self._inner,attrName)
@@ -504,7 +540,9 @@ class Tagged(DERBase):
     def __getitem__(self,index):
         if "__getitem__" in self._inner._wrappable:
             return self._inner.__getitem__(index)
+        
     def __setitem__(self,index,item):
+        self._presented = True
         if "__setitem__" in self._inner._wrappable:
             self._inner.__setitem__(index,item)
 
@@ -533,7 +571,7 @@ class ExplicitlyTagged(Tagged):
         self._taggedType = "Explicitly"
 
     def getEncoded(self):
-        if not self._presented: return ""
+        if not self._presented: return b""
         return Constructed(self.Tag,self.Class,contentObjects=[self._inner]).getEncoded()
     
     def _loadContentFromBytes(self, data, offset, Length):
@@ -547,7 +585,7 @@ class ImplicitlyTagged(Tagged):
         self._inner.Class = Class
         self._taggedType = "Implicitly"
     def getEncoded(self):
-        if not self._presented: return ""
+        if not self._presented: return b""
         return self._inner.getEncoded()
     def _loadContentFromBytes(self,data,offset,Length):
         self._inner._loadContentFromBytes(data,offset,Length)
@@ -648,9 +686,10 @@ class Sequence(Constructed):
         assert (orgOffset+Length == offset)
 
 class SequenceOf(Sequence):
-    def __init__(self,elementName:str,contentObjects=None):
+    def __init__(self,elementName:str,contentObjects=None, defaultTagging=None):
         super(SequenceOf,self).__init__(contentObjects)
         self.elementName = elementName
+        self._defaultTagging = defaultTagging
     def _reprLine(self):
         if self.elementName.count("\n"):
             l1 = self.elementName.splitlines()[0]
@@ -663,7 +702,7 @@ class SequenceOf(Sequence):
         self._contentObjects = []
         orgOffset = offset
         while offset < orgOffset+Length:
-            o = buildTemplate(self.elementName)
+            o = buildTemplate(self.elementName, self._defaultTagging)
             offset = o.loadFromBytes(data, offset, -1)
             self._contentObjects.append((o,""))
 
@@ -689,16 +728,17 @@ class Set(Constructed):
         assert (orgOffset+Length == offset)
 
 class SetOf(Set):
-    def __init__(self,elementName,contentObjects=None):
+    def __init__(self,elementName,contentObjects=None, defaultTagging = None):
         super(SetOf,self).__init__(contentObjects)
         self.elementName = elementName
+        self._defaultTagging = defaultTagging
     def _reprLine(self):
         return "SetOf(%s):"%self.elementName
     def _loadContentFromBytes(self,data,offset,Length):
         self._contentObjects = []
         orgOffset = offset
         while offset < orgOffset+Length:
-            o = buildTemplate(self.elementName)
+            o = buildTemplate(self.elementName, self._defaultTagging)
             offset = o.loadFromBytes(data, offset, -1)
             self._contentObjects.append((o,""))
 
@@ -737,6 +777,27 @@ class Any(DERBase):
             return x[:newLineIndex]+"<any>"+x[newLineIndex:]
     def getEncoded(self) -> bytes:
         return self._inner.getEncoded()
+    
+    def getValue(self):
+        return self._inner.getValue()
+
+    def setValue(self, newVal):
+        self._inner.setValue(newVal)
+    
+    def getContentOctets(self) -> bytes:
+        return self._inner.getContentOctets()
+
+    def setContentOctets(self, newContent: bytes):
+        self._inner.setContentOctets(newContent)
+    
+    @property
+    def value(self):
+        return self.getValue()
+    
+    @value.setter
+    def value(self, newVal):
+        self._presented = True
+        return self.setValue(newVal)
     
     def __getattr__(self,attrName):
         if attrName in self._inner._wrappable:
@@ -887,7 +948,7 @@ def buildTemplate(name,defaultTagging = None):
                 tagging = None
             splited = l.split(None,1)
             typeName = splited[0]
-            x = buildTemplate(typeName)
+            x = buildTemplate(typeName, defaultTagging)
             if tagging == "E":
                 x = ExplicitlyTagged(tag, CONTEXT_SPECIFIC_CLASS,  x, False)
             elif tagging == "I":
@@ -896,9 +957,9 @@ def buildTemplate(name,defaultTagging = None):
         return Choice(choices)
     
     elif x.startswith("SEQUENCE_OF"):
-        return SequenceOf(x[len("SEQUENCE_OF")+1:])
+        return SequenceOf(x[len("SEQUENCE_OF")+1:], defaultTagging=defaultTagging)
     elif x.startswith("SET_OF"):
-        return SetOf(x.split()[1])
+        return SetOf(x.split()[1], defaultTagging=defaultTagging)
     elif x.startswith("SEQUENCE") or x.startswith("SET"):
         objs = []
         ls = x[x.find("{")+1:x.find("}")].split(",")
@@ -936,7 +997,7 @@ def buildTemplate(name,defaultTagging = None):
                 optional = True
             else:
                 optional = False
-            template = buildTemplate(typeName)
+            template = buildTemplate(typeName, defaultTagging)
             if tagging == "E":
                 template = ExplicitlyTagged(tag, CONTEXT_SPECIFIC_CLASS,  template, optional)
             elif tagging == "I" or optional:
@@ -946,6 +1007,6 @@ def buildTemplate(name,defaultTagging = None):
         elif x.startswith("SET"): return Set(objs)
         else: raise
     elif x in g_structures.keys():
-        return buildTemplate(x)
+        return buildTemplate(x, defaultTagging)
     else:
         raise Exception("cannot build %s"%x)

@@ -1,1 +1,1 @@
-from spyder import *
+from .spyder import *
